@@ -22,6 +22,11 @@
     "types": "./dist/optimizeImmutableUpdate.d.ts",
     "default": "./dist/optimizeImmutableUpdate.js"
   },
+  "types": "./dist/optimizeImmutableUpdate.d.ts",
+  "main": "./dist/optimizeImmutableUpdate.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "ts-check": "tsc --noEmit --incremental",
     "lint": "eslint src --fix",

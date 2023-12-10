@@ -19,6 +19,8 @@
         "dist/*.js"
       ],
       "rules": {
+        "unicorn/prefer-module": "off",
+        "camelcase": "off",
         "init-declarations": "off",
         "no-magic-numbers": "off",
         "no-undef": "off",

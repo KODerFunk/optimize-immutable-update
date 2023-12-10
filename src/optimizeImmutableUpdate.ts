@@ -1,6 +1,6 @@
 import { isPlainObject } from 'is-plain-object'
 
-type IOptimizeImmutableUpdateIdStructure =
+export type IOptimizeImmutableUpdateIdStructure =
   | undefined
   | string
   | IOptimizeImmutableUpdateIdStructure[]

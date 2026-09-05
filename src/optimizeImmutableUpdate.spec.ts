@@ -1,4 +1,4 @@
-/* eslint-disable id-length, max-lines, max-lines-per-function, max-statements, @typescript-eslint/no-magic-numbers */
+/* eslint-disable id-length, max-classes-per-file, max-lines, max-lines-per-function, max-statements, no-sparse-arrays, @typescript-eslint/no-magic-numbers, unicorn/no-unsafe-property-key */
 import optimizeImmutableUpdate from './optimizeImmutableUpdate'
 
 describe('optimizeImmutableUpdate', () => {
@@ -126,6 +126,31 @@ describe('optimizeImmutableUpdate', () => {
     expect(optimizedNext.deep.deepUntouched === nextObject.deep.deepUntouched).toEqual(true)
     expect(optimizedNext.deep.deeper === prevObject.deep.deeper).toEqual(false)
     expect(optimizedNext.deep.deeper === nextObject.deep.deeper).toEqual(true)
+  })
+
+  it('works with RegExp instances', () => {
+    const prevObject = { r: /ab/g }
+    const nextObject = { r: /ab/g }
+
+    expect(optimizeImmutableUpdate(prevObject, nextObject) === prevObject).toEqual(true)
+
+    const prevRegExp = /ab/g
+    const sameRegExp = /ab/g
+    const changedRegExp = /ac/g
+    const otherFlagsRegExp = /ab/i
+
+    expect(optimizeImmutableUpdate(prevRegExp, sameRegExp) === prevRegExp).toEqual(true)
+    expect(optimizeImmutableUpdate(prevRegExp, changedRegExp) === changedRegExp).toEqual(true)
+    expect(optimizeImmutableUpdate(prevRegExp, otherFlagsRegExp) === otherFlagsRegExp).toEqual(true)
+    expect(optimizeImmutableUpdate({} as unknown as RegExp, sameRegExp) === sameRegExp).toEqual(true)
+
+    // lastIndex is mutable execution state, not part of the value
+    const prevWithLastIndex = /ab/g
+    const sameWithOtherLastIndex = /ab/g
+
+    prevWithLastIndex.lastIndex = 2
+
+    expect(optimizeImmutableUpdate(prevWithLastIndex, sameWithOtherLastIndex) === prevWithLastIndex).toEqual(true)
   })
 
   it('works with change object to array', () => {
@@ -545,5 +570,172 @@ describe('optimizeImmutableUpdate', () => {
     expect(next0 === prev2).toEqual(true)
     expect(next1 === prev0).toEqual(true)
     expect(next2 === prev1).toEqual(true)
+  })
+
+  it('stabilizes NaN values', () => {
+    const prevObject = { a: NaN, nested: { b: NaN } }
+    const nextObject = { a: NaN, nested: { b: NaN } }
+
+    expect(optimizeImmutableUpdate(prevObject, nextObject) === prevObject).toEqual(true)
+
+    const prevArray = [NaN]
+    const nextArray = [NaN]
+
+    expect(optimizeImmutableUpdate(prevArray, nextArray) === prevArray).toEqual(true)
+
+    const changedNextObject = { a: 1, nested: { b: NaN } }
+
+    expect(optimizeImmutableUpdate(prevObject, changedNextObject) === changedNextObject).toEqual(true)
+  })
+
+  it('works with signed zero', () => {
+    const prevObject = { a: 0 }
+    const nextObject = { a: -0 }
+
+    const optimizedNext = optimizeImmutableUpdate(prevObject, nextObject)
+
+    expect(optimizedNext === nextObject).toEqual(true)
+    expect(Object.is(optimizedNext.a, -0)).toEqual(true)
+  })
+
+  it('returns next when prev kind differs from plain object', () => {
+    const emptyObject: Record<string, unknown> = {}
+
+    expect(optimizeImmutableUpdate([] as unknown as typeof emptyObject, emptyObject) === emptyObject).toEqual(true)
+    expect(optimizeImmutableUpdate(new Date(42) as unknown as typeof emptyObject, emptyObject) === emptyObject).toEqual(true)
+
+    class TestClass {
+      a = 1
+    }
+
+    const plainObject = { a: 1 }
+    const optimizedInstance = optimizeImmutableUpdate(new TestClass(), plainObject)
+
+    expect(optimizedInstance === plainObject).toEqual(true)
+    expect(optimizedInstance instanceof TestClass).toEqual(false)
+  })
+
+  it('works with symbol keys', () => {
+    const symbolKey = Symbol('symbolKey')
+    const prevObject = { a: 1 }
+    const nextObject = { a: 1, [symbolKey]: 'value' }
+
+    expect(optimizeImmutableUpdate(prevObject, nextObject) === nextObject).toEqual(true)
+    expect(nextObject[symbolKey]).toEqual('value')
+
+    const prevWithSymbolObject = { a: 1, [symbolKey]: { deep: 1 } }
+    const nextWithSymbolObject = { a: 1, [symbolKey]: { deep: 1 } }
+
+    expect(optimizeImmutableUpdate(prevWithSymbolObject, nextWithSymbolObject) === prevWithSymbolObject).toEqual(true)
+
+    const nonEnumerableSymbolKey = Symbol('nonEnumerable')
+    const nextNonEnumerableObject = { a: 1 }
+
+    Object.defineProperty(nextNonEnumerableObject, nonEnumerableSymbolKey, { value: 'ignored', enumerable: false })
+
+    // non-enumerable symbol keys are invisible, mirroring Object.keys semantics
+    expect(optimizeImmutableUpdate(prevObject, nextNonEnumerableObject) === prevObject).toEqual(true)
+  })
+
+  it('works with falsy and null ids in arrays', () => {
+    const prevObject = {
+      zero: [{ id: 0, v: 'a' }, { id: 1, v: 'b' }],
+      emptyString: [{ id: '', v: 'a' }, { id: 'x', v: 'b' }],
+    }
+    const nextObject = {
+      zero: [{ id: 1, v: 'b' }, { id: 0, v: 'a' }],
+      emptyString: [{ id: 'x', v: 'b' }, { id: '', v: 'a' }],
+    }
+
+    const optimizedNext = optimizeImmutableUpdate(prevObject, nextObject)
+
+    expect(optimizedNext).toStrictEqual(nextObject)
+    expect(optimizedNext === nextObject).toEqual(true)
+    expect(optimizedNext.zero[0] === prevObject.zero[1]).toEqual(true)
+    expect(optimizedNext.zero[1] === prevObject.zero[0]).toEqual(true)
+    expect(optimizedNext.emptyString[0] === prevObject.emptyString[1]).toEqual(true)
+    expect(optimizedNext.emptyString[1] === prevObject.emptyString[0]).toEqual(true)
+
+    const nullIdPrevArray = [{ id: null, v: 'a' }]
+    const nullIdNextArray = [{ id: null, v: 'a' }]
+
+    expect(optimizeImmutableUpdate(nullIdPrevArray, nullIdNextArray) === nullIdPrevArray).toEqual(true)
+
+    const mixedPrevArray = [{ id: 1, v: 'a' }, { v: 'no-id' }]
+    const mixedNextArray = [{ id: 1, v: 'a' }, { v: 'no-id' }]
+
+    expect(optimizeImmutableUpdate(mixedPrevArray, mixedNextArray) === mixedPrevArray).toEqual(true)
+  })
+
+  it('keeps holes in sparse arrays instead of materializing them', () => {
+    const prevHoleyArray = [1, , 3]
+    const nextHoleyArray = [1, , 3]
+
+    expect(optimizeImmutableUpdate(prevHoleyArray, nextHoleyArray) === prevHoleyArray).toEqual(true)
+
+    const prevWithChangeArray = [1, , 3]
+    const nextWithChangeArray = [1, , 4]
+    const optimizedWithChange = optimizeImmutableUpdate(prevWithChangeArray, nextWithChangeArray)
+
+    expect(optimizedWithChange === nextWithChangeArray).toEqual(true)
+    expect(Object.hasOwn(nextWithChangeArray, 1)).toEqual(false)
+    expect(Object.keys(nextWithChangeArray)).toStrictEqual(['0', '2'])
+
+    // a value replaced by a hole is a change, not an equal shape
+    const prevValueArray = [1, 2, 3]
+    const nextHoleArray = [1, , 3]
+
+    expect(optimizeImmutableUpdate(prevValueArray, nextHoleArray) === nextHoleArray).toEqual(true)
+
+    const prevHoleArray = [1, , 3]
+    const nextValueArray = [1, 2, 3]
+
+    expect(optimizeImmutableUpdate(prevHoleArray, nextValueArray) === nextValueArray).toEqual(true)
+  })
+
+  it('degrades gracefully when next is not writable', () => {
+    const prevObject = { deep: { a: 1 }, other: { b: 2 } }
+    const nextFrozenObject = Object.freeze({ deep: { a: 1 }, other: { b: 2 } })
+
+    // a deep-equal frozen next still gets the perfect answer
+    expect(optimizeImmutableUpdate(prevObject, nextFrozenObject) === prevObject).toEqual(true)
+
+    const prevChangedObject = { deep: { a: 1 } }
+    const nextFrozenChangedObject = Object.freeze({ deep: { a: 2 } })
+
+    expect(optimizeImmutableUpdate(prevChangedObject, nextFrozenChangedObject) === nextFrozenChangedObject).toEqual(true)
+    expect(nextFrozenChangedObject.deep === prevChangedObject.deep).toEqual(false)
+
+    // sealed objects keep their existing slots writable, so reuse keeps working
+    const prevForSealedObject = { deep: { a: 1 } }
+    const nextSealedObject = Object.seal({ deep: { a: 1 } })
+
+    expect(optimizeImmutableUpdate(prevForSealedObject, nextSealedObject) === prevForSealedObject).toEqual(true)
+    expect(nextSealedObject.deep === prevForSealedObject.deep).toEqual(true)
+
+    const prevArray = [{ id: 1, v: 'a' }, { id: 2, v: 'b' }]
+    const nextFrozenArray = Object.freeze([{ id: 1, v: 'a' }, { id: 2, v: 'b' }])
+
+    expect(optimizeImmutableUpdate(prevArray, nextFrozenArray) === prevArray).toEqual(true)
+
+    // getter-only enumerable slots cannot take the reuse write either
+    const getterPrevObject = { deep: { a: 1 } }
+    const getterNextObject = {} as { deep: { a: number } }
+
+    Object.defineProperty(getterNextObject, 'deep', {
+      get: () => ({ a: 1 }),
+      enumerable: true,
+    })
+
+    expect(optimizeImmutableUpdate(getterPrevObject, getterNextObject) === getterPrevObject).toEqual(true)
+  })
+
+  it('ignores non-object id structure for object trees', () => {
+    const prevObject = { users: [{ id: 1, name: 'Ann' }] }
+    const nextObject = { users: [{ id: 1, name: 'Ann' }] }
+
+    expect(optimizeImmutableUpdate(prevObject, nextObject, 'id') === prevObject).toEqual(true)
+    expect(optimizeImmutableUpdate(prevObject, nextObject, ['id']) === prevObject).toEqual(true)
+    expect(optimizeImmutableUpdate(prevObject, nextObject, { users: 'id' }) === prevObject).toEqual(true)
   })
 })

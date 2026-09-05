@@ -15,7 +15,8 @@ export default function optimizeImmutableUpdate<S>(
     return next
   }
 
-  if (next === prev) {
+  // Object.is reuses prev for equal NaN; +0 vs -0 falls through and counts as a change
+  if (Object.is(next, prev)) {
     return prev
   }
 
@@ -41,12 +42,19 @@ export default function optimizeImmutableUpdate<S>(
       : next
   }
 
+  if (next instanceof RegExp) {
+    // lastIndex is mutable execution state, not part of the value
+    return prev instanceof RegExp && next.source === prev.source && next.flags === prev.flags
+      ? prev
+      : next
+  }
+
   if (isPlainObject(next)) {
-    return optimizeImmutableObjectUpdate(
-      prev as Record<string, unknown>,
-      next as Record<string, unknown>,
-      idStructure as Record<string, IOptimizeImmutableUpdateIdStructure> | undefined,
-    ) as S
+    if (!isPlainObject(prev)) {
+      return next
+    }
+
+    return optimizeImmutableObjectUpdate(prev, next, idStructure)
   }
 
   return next
@@ -55,10 +63,15 @@ export default function optimizeImmutableUpdate<S>(
 function optimizeImmutableObjectUpdate<O extends {}>(
   prev: O,
   next: O,
-  idStructure?: Record<string, IOptimizeImmutableUpdateIdStructure>,
+  idStructure?: IOptimizeImmutableUpdateIdStructure,
 ): O {
-  const nextKeys = Object.keys(next) as (keyof typeof next)[]
-  const prevKeys = Object.keys(prev) as (keyof typeof prev)[]
+  // only the object form is meaningful here;
+  // a leaked string/array form would be indexed like a Record ('code'['0'] leaks 'c')
+  const idStructureRecord = typeof idStructure === 'object' && !Array.isArray(idStructure)
+    ? idStructure
+    : undefined
+  const nextKeys = getOwnEnumerableKeys(next)
+  const prevKeys = getOwnEnumerableKeys(prev)
 
   let reallyChanged = nextKeys.length !== prevKeys.length
   let key: keyof O
@@ -67,10 +80,15 @@ function optimizeImmutableObjectUpdate<O extends {}>(
 
   for (key of nextKeys) {
     prevValue = prev[key]
-    immutedValue = optimizeImmutableUpdate(prevValue, next[key], idStructure?.[key as string])
+    immutedValue = optimizeImmutableUpdate(prevValue, next[key], idStructureRecord?.[key as string])
 
-    if (immutedValue === prevValue) {
-      next[key] = immutedValue
+    if (Object.is(immutedValue, prevValue)) {
+      try {
+        next[key] = immutedValue
+      } catch {
+        // non-writable slot (frozen/sealed/getter-only `next`): the value there is
+        // already correct, only the prev-reference reuse write is lost
+      }
     } else if (!reallyChanged) {
       reallyChanged = true
     }
@@ -90,7 +108,7 @@ function optimizeImmutableArrayUpdate<A extends unknown[]>(
   let reallyChanged = next.length !== prev.length
   let prevValue: unknown
   let immutedValue: unknown
-  let idValue: string | number | undefined
+  let idValue: string | number | null | undefined
 
   const idName = typeof idStructure === 'string'
     ? idStructure
@@ -98,13 +116,7 @@ function optimizeImmutableArrayUpdate<A extends unknown[]>(
       ? predictIdName(DEFAULT_ID_NAME, next) || predictIdName(DEFAULT_UUID_NAME, next)
       : undefined
 
-  const prevMap = idName && next.length > 0
-    ? new Map(prev.map((prevMapValue) => [
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      (prevMapValue as Record<typeof idName, string | number>)[idName]!,
-      prevMapValue,
-    ]))
-    : undefined
+  let prevMap: Map<string | number, unknown> | undefined
 
   let index: number
   let nextValue: unknown
@@ -112,50 +124,75 @@ function optimizeImmutableArrayUpdate<A extends unknown[]>(
   for ([index, nextValue] of next.entries()) {
     prevValue = prev[index]
 
-    if (idName && nextValue) {
-      idValue = (nextValue as Record<string, string | number>)[idName]
+    // a hole must stay a hole: writing it back would materialize it as an explicit `undefined`
+    if (Object.hasOwn(next, index)) {
+      if (idName && nextValue) {
+        idValue = (nextValue as Record<string, string | number | null | undefined>)[idName]
 
-      if (idValue && (!prevValue || (prevValue as Record<string, unknown>)[idName] !== idValue)) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        prevValue = prevMap!.get(idValue)
-
-        if (!reallyChanged) {
+        // 0, '' and 0n are valid ids, only null/undefined mean the item has no id
+        if (
+          idValue !== undefined
+          && idValue !== null
+          && (!prevValue || (prevValue as Record<string, unknown>)[idName] !== idValue)
+        ) {
+          // built lazily: fully positional arrays never pay for the map
+          prevMap ??= new Map(prev.map((prevMapValue) => [
+            (prevMapValue as Record<string, string | number>)[idName],
+            prevMapValue,
+          ]))
+          prevValue = prevMap.get(idValue)
           reallyChanged = true
         }
       }
-    }
 
-    immutedValue = optimizeImmutableUpdate(
-      prevValue,
-      nextValue,
-      Array.isArray(idStructure)
-        ? idStructure[index]
-        : undefined,
-    )
+      immutedValue = optimizeImmutableUpdate(
+        prevValue,
+        nextValue,
+        Array.isArray(idStructure)
+          ? idStructure[index]
+          : undefined,
+      )
 
-    if (immutedValue === prevValue) {
-      next[index] = immutedValue
-    } else if (!reallyChanged) {
-      reallyChanged = true
+      if (Object.is(immutedValue, prevValue)) {
+        try {
+          next[index] = immutedValue
+        } catch {
+          // non-writable slot (frozen/sealed/getter-only `next`): the value there is
+          // already correct, only the prev-reference reuse write is lost
+        }
+      } else if (!reallyChanged) {
+        reallyChanged = true
+      }
+    } else {
+      // a value replaced by a hole is a change, not an equal shape
+      reallyChanged ||= prevValue !== undefined
     }
   }
 
   return reallyChanged ? next : prev
 }
 
-function predictIdName<T extends unknown[]>(idName: string, array: T): string | undefined {
+function predictIdName(idName: string, array: unknown[]): string | undefined {
   const [first] = array
 
-  return first && typeof first === 'object' && idName in first
+  return first && typeof first === 'object' && Object.hasOwn(first, idName)
     ? idName
     : undefined
+}
+
+function getOwnEnumerableKeys<O extends {}>(value: O): (keyof O)[] {
+  // Object.keys skips symbol keys, so a symbol-only change would silently return prev
+  const symbolKeys = Object.getOwnPropertySymbols(value)
+    .filter(symbolKey => Object.getOwnPropertyDescriptor(value, symbolKey)?.enumerable === true)
+
+  return [...Object.keys(value), ...symbolKeys] as (keyof O)[]
 }
 
 type SimpleType =
   | boolean
   | number
   | string
-  | Function // eslint-disable-line @typescript-eslint/ban-types
+  | Function
   | null
   | undefined
 

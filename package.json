@@ -1,6 +1,6 @@
 {
   "name": "optimize-immutable-update",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "license": "MIT",
   "homepage": "https://github.com/KODerFunk/optimize-immutable-update",
   "bugs": {
@@ -19,36 +19,71 @@
   ],
   "types": "./dist/optimizeImmutableUpdate.d.ts",
   "main": "./dist/optimizeImmutableUpdate.js",
+  "exports": {
+    ".": {
+      "types": "./dist/optimizeImmutableUpdate.d.ts",
+      "default": "./dist/optimizeImmutableUpdate.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "default": "./dist/react/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "ts-check": "tsc --noEmit --incremental",
-    "lint": "eslint src --fix",
+    "lint:fix": "eslint src --fix",
     "lint:ci": "eslint src",
     "test": "jest",
     "test:ci": "jest --ci",
-    "precommit": "npm run lint && npm run ts-check && npm run lint && npm run test",
+    "bench": "node benchmark/bench.mjs",
+    "precommit": "npm run ts-check && npm run lint:fix && npm run ts-check && npm run test",
     "prebuild": "rm -rf ./dist",
     "build": "tsc --project tsconfig.build.json",
     "postbuild": "eslint dist --fix",
     "prerelease": "npm run build",
     "release": "np"
   },
+  "peerDependencies": {
+    "react": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
   "dependencies": {
-    "is-plain-object": "^5.0.0"
+    "is-plain-object": "^5.1.0"
   },
   "devDependencies": {
-    "@total-typescript/ts-reset": "^0.5.1",
-    "@types/jest": "^29.5.11",
-    "@typescript-eslint/eslint-plugin": "^6.13.2",
-    "@typescript-eslint/parser": "^6.13.2",
-    "eslint": "^8.55.0",
-    "eslint-plugin-unicorn": "^49.0.0",
-    "jest": "^29.7.0",
-    "np": "^9.2.0",
-    "ts-jest": "^29.1.1",
+    "@eslint/js": "^10.0.1",
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "@tanstack/query-core": "^5.102.8",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
+    "@total-typescript/ts-reset": "^0.6.1",
+    "@types/jest": "^30.0.0",
+    "@types/react": "^19.2.18",
+    "deepmerge": "^4.3.1",
+    "dequal": "^2.0.3",
+    "emerge": "^0.5.1",
+    "eslint": "^10.9.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-unicorn": "^74.0.0",
+    "gattai-merge": "^3.4.9",
+    "globals": "^17.12.0",
+    "jest": "^30.5.1",
+    "jest-environment-jsdom": "^30.5.1",
+    "np": "^12.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tinybench": "^6.1.5",
+    "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.69.0"
   }
 }
